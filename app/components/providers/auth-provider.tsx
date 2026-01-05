@@ -1,10 +1,25 @@
 "use client";
 import type React from "react";
-import { useState, createContext, useContext, useLayoutEffect } from "react";
+import {
+  useState,
+  createContext,
+  useContext,
+  useLayoutEffect,
+  useEffect,
+} from "react";
 import api from "@/lib/api";
+
+type User = {
+  id: string;
+  email: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+};
 
 type AuthContextType = {
   authToken: string | null;
+  user: User | null;
   login: (email: string, password: string) => Promise<void>;
 };
 
@@ -12,6 +27,18 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authToken, setAuthToken] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+
+  const fetchUser = async () => {
+    try {
+      const response = await api.get("/auth/me");
+      setUser(response.data);
+    } catch (error) {
+      console.error("Failed to fetch user:", error);
+      setAuthToken(null);
+      setUser(null);
+    }
+  };
 
   const login = async (email: string, password: string) => {
     try {
@@ -22,6 +49,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw error;
     }
   };
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        await fetchUser();
+      } catch (error) {
+        // Not authenticated
+      }
+    };
+
+    checkAuth();
+  }, []);
 
   useLayoutEffect(() => {
     const authInterceptor = api.interceptors.request.use((config: any) => {
@@ -45,7 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (
           !originalRequest._retry &&
-          error.response?.status === 403 &&
+          error.response?.status === 401 &&
           error.response?.data?.error === "Unauthorized"
         ) {
           try {
@@ -72,7 +111,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ authToken, login }}>
+    <AuthContext.Provider value={{ authToken, login, user }}>
       {children}
     </AuthContext.Provider>
   );
