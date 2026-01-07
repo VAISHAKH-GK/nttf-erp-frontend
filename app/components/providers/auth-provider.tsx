@@ -20,6 +20,7 @@ type User = {
 type AuthContextType = {
   authToken: string | null;
   user: User | null;
+  isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
 };
 
@@ -28,38 +29,40 @@ const AuthContext = createContext<AuthContextType | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  const fetchUser = async () => {
-    try {
-      const response = await api.get("/auth/me");
-      setUser(response.data);
-    } catch (error) {
-      console.error("Failed to fetch user:", error);
-      setAuthToken(null);
-      setUser(null);
-    }
+  const fetchUser = () => {
+    setIsLoading(true);
+    api
+      .get("/auth/me")
+      .then((res) => {
+        setUser(res.data);
+      })
+      .catch((err) => {
+        console.error("Failed to fetch user:", err);
+        setAuthToken(null);
+        setUser(null);
+      })
+      .finally(() => {
+        setIsLoading(false);
+      });
   };
 
-  const login = async (email: string, password: string) => {
-    try {
-      const res = await api.post("/auth/login", { email, password });
-
-      setAuthToken(res.data.authToken);
-    } catch (error) {
-      throw error;
-    }
+  const login = (email: string, password: string) => {
+    return api
+      .post("/auth/login", { email, password })
+      .then((res) => {
+        setUser(res.data);
+      })
+      .catch((err) => {
+        setAuthToken(null);
+        setUser(null);
+        throw err;
+      });
   };
 
   useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        await fetchUser();
-      } catch (error) {
-        // Not authenticated
-      }
-    };
-
-    checkAuth();
+    fetchUser();
   }, []);
 
   useLayoutEffect(() => {
@@ -79,26 +82,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useLayoutEffect(() => {
     const refreshInterceptor = api.interceptors.response.use(
       (response) => response,
-      async (error) => {
+      (error) => {
         const originalRequest = error.config;
+
+        if (originalRequest.url?.includes("/auth/refresh")) {
+          console.error("Refresh token expired or invalid");
+          setAuthToken(null);
+          setUser(null);
+          return Promise.reject(error);
+        }
 
         if (
           !originalRequest._retry &&
           error.response?.status === 401 &&
           error.response?.data?.error === "Unauthorized"
         ) {
-          try {
-            const response = await api.get("/auth/refresh");
-
-            setAuthToken(response.data.authToken);
-
-            originalRequest.headers.Authorization = `Bearer ${response.data.authToken}`;
-            originalRequest._retry = true;
-
-            return api(originalRequest);
-          } catch {
-            setAuthToken(null);
-          }
+          return api
+            .get("/auth/refresh")
+            .then((response) => {
+              setAuthToken(response.data.authToken);
+              originalRequest.headers.Authorization = `Bearer ${response.data.authToken}`;
+              originalRequest._retry = true;
+              return api(originalRequest);
+            })
+            .catch(() => {
+              setAuthToken(null);
+              return Promise.reject(error);
+            });
         }
 
         return Promise.reject(error);
@@ -111,7 +121,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ authToken, login, user }}>
+    <AuthContext.Provider value={{ authToken, login, user, isLoading }}>
       {children}
     </AuthContext.Provider>
   );
